@@ -1,0 +1,236 @@
+---
+title: "Code for linear tests"
+author: "D. Rex Mitchell"
+date: '2022-09-14'
+output: html_document
+---
+```{r}
+library(rstudioapi) # Safely Access the RStudio API
+setwd(dirname(getActiveDocumentContext()$path))
+```
+
+Load packages and import data
+```{r}
+library(geomorph)
+library(nlme)
+library(landvR)
+data <- read.morphologika("../Data/Mrufus_morphologika.txt") # doesn't work in Rmd for some reason
+```
+
+
+### Heatmap function ###
+```{r}
+map2color <- function(x, pal, limits = range(x)){
+  pal[findInterval(x, seq(limits[1], limits[2], length.out = length(pal) + 1), 
+                   all.inside=TRUE)]
+}
+```
+
+Procrustes superimpositions
+```{r}
+ruf_gpa <- gpagen(data$coords)
+pairs <- read.csv("../Data/landpairs.csv", header=T) # not working in Rmd for some reason
+ind <- dimnames(data$coords)[[3]]
+ruf_gpa_bi<- bilat.symmetry(data$coords, ind = ind, land.pairs = pairs, object.sym=T)
+summary(ruf_gpa_bi)
+```
+
+Extract variables
+```{r}
+mn <- mshape(ruf_gpa_bi$symm.shape)
+shape <- ruf_gpa_bi$symm.shape
+sex <- as.factor(data$labels[,1])  # 98F, 68M
+pop <- as.factor(data$labels[,6])  # 115M, 51Q
+size <- ruf_gpa$Csize
+age <- data$labels[,5]
+foot <- data$labels[,3]
+wt <- data$labels[,2]
+```
+
+Chi square test of sex ratios
+```{r}
+nmat <- matrix(data=c(67.83,32.17,39.22,60.79), nrow=2, ncol=2, byrow=T, dimnames = list(c("M", "Q"),c("F", "M")))
+cst <- chisq.test(nmat);cst
+# sex ratios significantly different.
+```
+
+Check outliers
+```{r}
+plotOutliers(ruf_gpa$coords)
+# several outliers, but no landmark anomalies. All are juveniles/subadults
+```
+
+Cranial shape allometry
+```{r}
+allom_all <- procD.lm(shape~log(size), iter=999); summary(allom_all)
+# Given a particular size, sex has a very small influence on shape (Rsq = 0.010, p = 0.006)
+
+allom_plot <- plot(allom_all, type = "regression", predictor = log(size), 
+                    reg.type = "RegScore", pch = 21, bg="grey",
+                    xlab = "log(centroid size)", ylab = "Regression score", cex=2)
+line <- lm(allom_plot$RegScore~log(size)); line
+abline(-1.3259,0.2332, lwd=3, lty=2)
+
+preds <- shape.predictor(allom_all$GM$fitted, x = allom_plot$PredLine, 
+                         predmin = min(allom_plot$PredLine), 
+                         predmax = max(allom_plot$PredLine))
+differences <- coordinates.difference(coordinates = preds$predmax,
+                                      reference = preds$predmin, type = "spherical")
+procrustes.var.plot(preds$predmin, preds$predmax, col = heat.colors, col.val = differences[[1]][1:37], magnitude = 1, pt.size = 1)
+```
+
+Sexual dimorphism in cranial shape
+```{r}
+allom_all <- procD.lm(shape~log(ruf_gpa$Csize)*as.factor(sex), iter=999); summary(allom_all)
+# sex has a very small influence on shape (Rsq = 0.010, p = 0.006)
+
+allom_plot <- plot(allom_all, type = "regression", predictor = log(size), reg.type = "RegScore", pch = c(21,24)[sex], bg=c("gray29","grey69")[sex], xlab = "log(centroid size)", ylab = "Regression score", cex=3)
+```
+
+
+### compare populations at same age ranges ###
+First, subset data ranges
+```{r}
+plot(age~pop)
+
+mage <- subset(age, pop=="M")
+mage <- as.numeric(mage)
+min(mage) # 1.149230479
+max(mage) # 17.58357
+
+qage <- subset(age, pop=="Q")
+qage <- as.numeric(qage)
+min(qage) # 2.520328
+max(qage) # 14.90415
+
+age <- as.numeric(age)
+same_age_data <- subset(two.d.array(data$coords), age >= 2.520328 & age <= 14.90415)
+sa_array <- arrayspecs(same_age_data, 37, 3)
+names <- subset(dimnames(shape)[[3]], age > 2.520328 & age < 14.90415)
+ind <- names
+ruf_gpa_bi_sa<- bilat.symmetry(sa_array, ind = ind, land.pairs = pairs, object.sym=T)
+shape_sa <- ruf_gpa_bi_sa$symm.shape
+```
+
+subset variables
+```{r}
+ps <- gpagen(sa_array)
+size_sa <- ps$Csize
+size_sa <- as.numeric(size_sa)
+sex_sa <- subset(sex, age >= 2.520328 & age <= 14.90415) 
+pop_sa <- subset(pop, age >= 2.520328 & age <= 14.90415)
+foot_sa <- subset(foot, age >= 2.520328 & age <= 14.90415)
+wt_sa <-subset(wt, age >= 2.520328 & age <= 14.90415)
+age_sa <- subset(age, age >= 2.520328 & age <= 14.90415)
+```
+
+
+### split into sexes
+```{r}
+cran_saF <- subset(two.d.array(shape_sa), sex_sa=="F")
+shape_saF <- arrayspecs(cran_saF, 37,3) # 86
+cran_saM <- subset(two.d.array(shape_sa), sex_sa=="M")
+shape_saM <- arrayspecs(cran_saM, 37,3) # 63
+foot_saF <- subset(foot_sa, sex_sa=="F")
+foot_saM <- subset(foot_sa, sex_sa=="M")
+size_saF <- subset(size_sa, sex_sa=="F")
+size_saM <- subset(size_sa, sex_sa=="M")
+pop_saF <- subset(pop_sa, sex_sa=="F")
+pop_saM <- subset(pop_sa, sex_sa=="M")
+wt_saF <- subset(wt_sa, sex_sa=="F")
+wt_saM <- subset(wt_sa, sex_sa=="M")
+age_saF <- subset(age_sa, sex_sa=="F")
+age_saM <- subset(age_sa, sex_sa=="M")
+```
+
+shape/age regressions
+```{r}
+Fageshape <- procD.lm(shape_saF~age_saF*pop_saF, iter=999); summary(Fageshape) # not sig
+Mageshape <- procD.lm(shape_saM~age_saM*pop_saM, iter=999); summary(Mageshape) # not sig
+```
+
+Centroid size/age resressions
+```{r}
+Fagepop <- procD.lm(log(size_saF)~age_saF*pop_saF, iter=999); summary(Fagepop) # not sig
+Magepop <- procD.lm(log(size_saM)~age_saM*pop_saM, iter=999); summary(Magepop) # sig population diffs (p = 0.006)
+
+Magepop_plot <- plot(age_saM, log(size_saM), pch = c(21,24)[pop_saM], bg=c("orange","purple")[pop_saM], 
+                     xlab = "age", ylab = "log(cranial size)", cex=3, cex.lab=1.5)
+
+size_mm <- subset(size_saM, pop_saM=="M")
+size_qm <- subset(size_saM, pop_saM=="Q")
+age_mm <- subset(age_saM, pop_saM=="M")
+age_qm <- subset(age_saM, pop_saM=="Q")
+
+mline <- lm(log(size_mm)~age_mm) 
+abline(5.58717, 0.03048, col = "orange", lwd=4, lty=3)
+qline <- lm(log(size_qm)~age_qm)
+abline( 5.65375,  0.02172, col = "purple", lwd=4, lty=5)
+```
+
+Weight/age regressions
+```{r}
+Fagepopwt <- procD.lm(wt_saF~age_saF*pop_saF, iter=999); summary(Fagepopwt)
+Fagepopwt_plot <- plot(age_saF, wt_saF, pch = c(21,24)[pop_saF], bg=c("orange","purple")[pop_saF], 
+                     xlab = "age", ylab = "body weight (kg)", cex=3, cex.lab=1.5)
+
+wt_mf <- subset(wt_saF, pop_saF=="M")
+wt_qf <- subset(wt_saF, pop_saF=="Q")
+age_mf <- subset(age_saF, pop_saF=="M")
+age_qf <- subset(age_saF, pop_saF=="Q")
+
+mline <- lm(wt_mf~age_mf); mline 
+abline(16.9108, 0.5617, col = "orange", lwd=4, lty=3)
+qline <- lm(wt_qf~age_qf); qline
+abline(18.3938, 0.6405, col = "purple", lwd=4, lty=5)
+
+Magepopwt <- procD.lm(wt_saM~age_saM*pop_saM, iter=999); summary(Magepopwt)
+Magepopwt_plot <- plot(age_saM, wt_saM, pch = c(21,24)[pop_saM], bg=c("orange","purple")[pop_saM], 
+                       xlab = "age", ylab = "body weight (kg)", cex=3, cex.lab=1.5)
+
+wt_mm <- subset(wt_saM, pop_saM=="M")
+wt_qm <- subset(wt_saM, pop_saM=="Q")
+age_mm <- subset(age_saM, pop_saM=="M")
+age_qm <- subset(age_saM, pop_saM=="Q")
+
+mline <- lm(wt_mm~age_mm); mline 
+abline(11.711, 3.116, col = "orange", lwd=4, lty=3)
+qline <- lm(wt_qm~age_qm); qline
+abline(20.755, 1.934, col = "purple", lwd=4, lty=5)
+```
+
+Pes length/age regressions
+```{r}
+Fagepopfoot <- procD.lm(foot_saF~age_saF*pop_saF, iter=999); summary(Fagepopfoot)
+Fagepopfoot_plot <- plot(age_saF, foot_saF, pch = c(21,24)[pop_saF], bg=c("orange","purple")[pop_saF], 
+                       xlab = "age", ylab = "pes length (mm)", cex=3, cex.lab=1.5)
+
+foot_mf <- subset(foot_saF, pop_saF=="M")
+foot_qf <- subset(foot_saF, pop_saF=="Q")
+age_mf <- subset(age_saF, pop_saF=="M")
+age_qf <- subset(age_saF, pop_saF=="Q")
+
+mline <- lm(foot_mf~age_mf); mline 
+abline(274.461, 1.623, col = "orange", lwd=4, lty=3)
+qline <- lm(foot_qf~age_qf); qline
+abline(285.1298, 0.8303, col = "purple", lwd=4, lty=5)
+
+
+Magepopfoot <- procD.lm(foot_saM~age_saM*pop_saM, iter=999); summary(Magepopfoot)
+Magepopfoot_plot <- plot(age_saM, foot_saM, pch = c(21,24)[pop_saM], bg=c("orange","purple")[pop_saM], 
+                         xlab = "age", ylab = "pes length (mm)", cex=3, cex.lab=1.5)
+
+foot_mm <- subset(foot_saM, pop_saM=="M")
+foot_qm <- subset(foot_saM, pop_saM=="Q")
+age_mm <- subset(age_saM, pop_saM=="M")
+age_qm <- subset(age_saM, pop_saM=="Q")
+
+mline <- lm(foot_mm~age_mm); mline 
+abline(280.373, 7.862, col = "orange", lwd=4, lty=3)
+qline <- lm(foot_qm~age_qm); qline
+abline(311.447, 3.081, col = "purple", lwd=4, lty=5)
+```
+
+
+
+

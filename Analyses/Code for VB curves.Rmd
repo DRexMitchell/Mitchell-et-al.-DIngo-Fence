@@ -1,0 +1,214 @@
+---
+title: "Code for VB curves"
+author: "D. Rex Mitchell"
+date: '2022-09-13'
+output: html_document
+---
+
+```{r}
+library(rstudioapi) # Safely Access the RStudio API
+setwd(dirname(getActiveDocumentContext()$path))
+```
+
+Load packages and import data
+```{r}
+library(geomorph)
+library(nlme)
+
+data <- read.morphologika("../Data/Mrufus_morphologika.txt") # not working in Rmd for some reason
+```
+
+
+function for colour continua
+```{r}
+map2color <- function(x, pal, limits = range(x)){
+  pal[findInterval(x, seq(limits[1], limits[2], length.out = length(pal) + 1), 
+                   all.inside=TRUE)]
+}
+```
+
+
+Perform superimpositions
+```{r}
+gpa <- gpagen(data$coords)
+pairs <- read.csv("../Data/landpairs.csv", header=T) # not working in Rmd for some reason
+ind <- dimnames(data$coords)[[3]]
+gpa_bi<- bilat.symmetry(data$coords, ind = ind, land.pairs = pairs, object.sym=T)
+```
+
+Arrange data
+```{r}
+Agedata <- cbind(as.numeric(data$labels[,5]), gpa$Csize, as.factor(data$labels[,1]), as.numeric(data$labels[,2]),as.numeric(data$labels[,3]), as.factor(data$labels[,6]))
+dimnames(Agedata)[[2]] <- c("age","size","sex", "wt","foot", "pop")
+Agedata <- as.data.frame(Agedata)
+attach(Agedata)
+
+```
+
+Split sexes for all variables
+```{r}
+malesize <- subset(size, sex=="2")
+femalesize <- subset(size, sex=="1")
+malefoot <- subset(foot, sex=="2")
+femalefoot <- subset(foot, sex=="1")
+maleage <- subset(age, sex=="2")
+femaleage <- subset(age, sex=="1")
+malewt <- subset(wt, sex=="2")
+femalewt <- subset(wt, sex=="1")
+femalepop <- subset(pop, sex=="2")
+malepop <- subset(pop, sex=="1")
+```
+
+
+Create colour palates for the two sexes
+```{r}
+cont1 <- colorRampPalette(c('magenta','purple4'), interpolate = "linear")
+colage1 <- cont1(18)
+colmap1 <- map2color(x=maleage, pal=colage1, limits=range(maleage))
+cont2 <- colorRampPalette(c('yellow','red'), interpolate = "linear")
+colage2 <- cont2(18)
+colmap2 <- map2color(x=femaleage, pal=colage2, limits=range(femaleage))
+```
+
+
+Relative foot length test
+```{r}
+allomfoot <- procD.lm(foot~log(size)*sex, iter=999); summary(allomfoot)
+# foot length is significantly sexually dimorphic at a given size (Rsq = 0.025, p = 0.001)
+
+foot_plot <- plot(log(malesize),malefoot, pch = 24, bg=colmap1, xlab = "log(cranial centroid size)", ylab = "pes length (mm)", cex=3, cex.lab=2, cex.axis=1.25)
+
+points(log(femalesize), femalefoot, pch=21, bg=colmap2, cex=3)
+
+fem <- lm(femalefoot~log(femalesize)); fem
+abline(-604.8, 156.3, col = "red", lwd=4, lty=1)
+mal <- lm(malefoot~log(malesize)); mal
+abline(-1139.9, 254.3 , col = "purple4", lwd=4, lty=1)
+```
+
+### Ages tests ### 
+
+
+#Find out approximate starting values. 
+#data = can't be a matrix
+```{r}
+fit <- nls(log(size) ~ Vmax*(1 - exp(-k*(age-t0))),start=list(Vmax=5.8,k=0.3, t0=1))
+summary(fit)
+
+Agenls = nlsList(log(size) ~ Vmax*(1 - exp(-k*(age-t0)))|sex,start=list(Vmax=5.77,k=0.55, t0=-4.08), data=Agedata)
+
+# this is how you get the estimates for the three parameters of the curve (Vmax - asymptote point, k - growth coefficient, t0 - point at y = 0) for each sex. These are the values you the place into the nlme model.
+
+Agenls_fit <- summary(Agenls)
+```
+
+To run the fit, the input start values require the first groups value for each metric, followed by the difference from the other group (but make sure it's correctly signed plus or minus).
+
+```{r}
+Fit_age_sex <- nlme(log(size)~Vmax*(1 - exp(-k*(age-t0))), fixed= Vmax+k+t0~sex, random=Vmax+k+t0~1|sex, data=Agedata, start=c(5.76, -0.06, 0.37, -0.14, -6.88, -2.75))
+
+summary(Fit_age_sex)
+```
+Here you get the significance of parameters between the groups. In this case, the Vmax and t0 parameters are different but the growth coefficient is nearly not significant. 
+
+```{r}
+Agenls_female=nls(log(femalesize) ~ Vmax * (1 - exp(-k*(femaleage -t0))), start=list(Vmax=5.7,k=0.37, t0=-6.8))
+Agenls_male=nls(log(malesize) ~ Vmax * (1 - exp(-k*(maleage -t0))), start=list(Vmax=5.7,k=0.37, t0=-6.8))
+```
+
+Double check it corresponds with overall fit if you like
+```{r}
+summary(Agenls_male)
+summary(Agenls_female)
+```
+
+Plot the curves
+```{r}
+agecran_plot <- plot(maleage, log(malesize), pch = 24, bg=colmap1, xlab = "Age", ylab = "log(cranial size)", cex=3, cex.lab=1.5, cex.axis=1.25, xlim = c(0,18))
+points(femaleage, log(femalesize), pch=21, bg=colmap2, cex=3)
+
+fitted.data_female <- data.frame(femaleage=femaleage, y=predict(Agenls_female, list(femaleage=femaleage)))
+fitted.data_male <- data.frame(maleage=maleage, y=predict(Agenls_male, list(maleage=maleage)))
+
+#ages and fitted data need sorting from smallest to biggest for this to work, assuming each increase with each other
+lines(sort(fitted.data_female$femaleage), sort(fitted.data_female$y), lwd=4, col="red")
+lines(sort(fitted.data_male$maleage), sort(fitted.data_male$y), lwd=4, col="purple4")
+```
+
+Same code for body weight differences
+```{r}
+fit <- nls(wt ~ Vmax*(1 - exp(-k*(age-t0))),start=list(Vmax=30,k=0.3, t0=1))
+summary(fit)
+Agenls = nlsList(wt ~ Vmax*(1 - exp(-k*(age-t0)))|sex,start=list(Vmax=27.23,k=0.57, t0=0.077), data=Agedata)
+Agenls_fit <- summary(Agenls)
+Fit_age_sex <- nlme(wt~Vmax*(1 - exp(-k*(age-t0))), fixed= Vmax+k+t0~sex, random=Vmax+k+t0~1|sex, data=Agedata, start=c(24.44, -16.19, 0.37, -0.08, -2.05, -0.42))
+summary(Fit_age_sex)
+
+### PLOTS ###
+femalewt <- as.numeric(femalewt)
+femaleage <- as.numeric(femaleage)
+Agenls_female=nls(femalewt ~ Vmax * (1 - exp(-k*(femaleage -t0))), start=list(Vmax=27.23,k=0.57, t0=0.077))
+malewt <- as.numeric(malewt)
+maleage <- as.numeric(maleage)
+Agenls_male=nls(malewt ~ Vmax * (1 - exp(-k*(maleage -t0))), start=list(Vmax=27.23,k=0.57, t0=0.077))
+
+summary(Agenls_male)
+summary(Agenls_female)
+
+agewt_plot <- plot(maleage, malewt, pch = 24, bg=colmap1, xlab = "Age", ylab = "body weight (kg)", cex=3, cex.lab=1.5, cex.axis=1.25, xlim = c(0,18))
+points(femaleage, femalewt, pch=21, bg=colmap2, cex=3)
+
+fitted.data_female <- data.frame(femaleage=femaleage, y=predict(Agenls_female, list(femaleage=femaleage)))
+fitted.data_male <- data.frame(maleage=maleage, y=predict(Agenls_male, list(maleage=maleage)))
+
+lines(sort(fitted.data_female$femaleage), sort(fitted.data_female$y), lwd=4, col="red")
+lines(sort(fitted.data_male$maleage), sort(fitted.data_male$y), lwd=4, col="purple4")
+```
+
+Same code for pes lengths
+```{r}
+fit <- nls(foot ~ Vmax*(1 - exp(-k*(age-t0))),start=list(Vmax=300,k=0.3, t0=1))
+summary(fit)
+Agenls = nlsList(foot ~ Vmax*(1 - exp(-k*(age-t0)))|sex,start=list(Vmax=305.56,k=0.9, t0=-0.44), data=Agedata)
+Agenls_fit <- summary(Agenls)
+Fit_age_sex <- nlme(foot~Vmax*(1 - exp(-k*(age-t0))), fixed= Vmax+k+t0~sex, random=Vmax+k+t0~1|sex, data=Agedata, start=c(292.53, -44.21, 0.56, -0.061, -2.05, -1.965))
+summary(Fit_age_sex)
+
+### PLOTS ###
+femalefoot <- as.numeric(femalefoot)
+femaleage <- as.numeric(femaleage)
+Agenls_female=nls(femalefoot ~ Vmax * (1 - exp(-k*(femaleage -t0))), start=list(Vmax=305.56,k=0.9, t0=-0.44))
+malefoot <- as.numeric(malefoot)
+maleage <- as.numeric(maleage)
+Agenls_male=nls(malefoot ~ Vmax * (1 - exp(-k*(maleage -t0))), start=list(Vmax=305.56,k=0.9, t0=-0.44))
+
+summary(Agenls_male)
+summary(Agenls_female)
+
+agefoot_plot <- plot(maleage, malefoot, pch = 24, bg=colmap1, xlab = "Age", ylab = "pes length (mm)", cex=3, cex.lab=1.5, cex.axis=1.25, xlim = c(0,18))
+points(femaleage, femalefoot, pch=21, bg=colmap2, cex=3)
+
+fitted.data_female <- data.frame(femaleage=femaleage, y=predict(Agenls_female, list(femaleage=femaleage)))
+fitted.data_male <- data.frame(maleage=maleage, y=predict(Agenls_male, list(maleage=maleage)))
+
+lines(sort(fitted.data_female$femaleage), sort(fitted.data_female$y), lwd=4, col="red")
+lines(sort(fitted.data_male$maleage), sort(fitted.data_male$y), lwd=4, col="purple4")
+```
+
+Make color bars for age
+```{r}
+color.bar <- function(lut, min=0, max=18, nticks=5, ticks=seq(min, max, len=nticks), title='') {
+  scale = (length(lut)-1)/(max-min)
+  
+  dev.new(width=1.75, height=5)
+  plot(c(0,18), c(min,max), type='n', bty='n', xaxt='n', xlab='', yaxt='n', ylab='', main=title)
+  
+  for (i in 1:(length(lut)-1)) {
+    y = (i-1)/scale + min
+    rect(0,y,18,y+1/scale, col=lut[i], border=NA)
+  }
+}
+
+color.bar(colorRampPalette(c("magenta","purple4"))(18), 0)
+color.bar(colorRampPalette(c("yellow","red"))(18), 0)
+```
